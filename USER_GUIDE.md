@@ -9,7 +9,9 @@ Serve per costruire una lista “cubo” di carte Magic: inserisci le carte una 
 1. Clicca nella barra di ricerca.
 2. Inizia a scrivere il nome di una carta (es: *Lightning Bolt*).
 3. Seleziona un suggerimento dalla lista (autocomplete) **oppure** premi Invio.
-4. La carta viene aggiunta al cubo.
+4. Si apre una **anteprima** con l’immagine della carta.
+5. Controlla e premi **Aggiungi al cubo** (quantità default: **1**).
+
 
 Se aggiungi una carta già presente, l’app aumenta automaticamente la quantità (qty).
 

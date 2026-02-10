@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { autocompleteNames, fetchByExactName, getThumb } from "./lib/scryfall";
+import { autocompleteNames, fetchByExactName, getImage, getThumb, type ScryfallCard } from "./lib/scryfall";
 import { cardToEntry, loadCube, loadMeta, saveCube, type CubeEntry } from "./lib/storage";
 import { cubeToCsv, cubeToJson, downloadTextFile } from "./lib/csv";
 import { debounce } from "./lib/debounce";
@@ -7,6 +7,12 @@ import { listBackups, restoreBackup, rotateBackups } from "./lib/backup";
 
 const BACKUPS_TO_KEEP = 5;
 const BACKUP_EVERY_MS = 45_000; // checkpoint at most every 45s (also on first change)
+
+type Pending = {
+  card: ScryfallCard;
+  thumb?: string;
+  image?: string;
+};
 
 function fmtTime(ts?: number) {
   if (!ts) return "—";
@@ -22,9 +28,14 @@ export default function App() {
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [isSuggestOpen, setIsSuggestOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+
   const [cube, setCube] = useState<CubeEntry[]>(() => loadCube());
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+
+  // Preview/confirm step
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [pendingQty, setPendingQty] = useState<number>(1);
 
   const meta = loadMeta();
   const totalCount = useMemo(() => cube.reduce((acc, e) => acc + e.qty, 0), [cube]);
@@ -69,6 +80,15 @@ export default function App() {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
+  // Escape closes modal
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPending(null);
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
   const runSuggest = useMemo(
     () =>
       debounce(async (q: string) => {
@@ -100,7 +120,7 @@ export default function App() {
     runSuggest(query);
   }, [query, runSuggest]);
 
-  async function addCardByName(name: string) {
+  async function previewCardByName(name: string) {
     const trimmed = name.trim();
     if (!trimmed) return;
     setIsLoading(true);
@@ -109,18 +129,10 @@ export default function App() {
     try {
       const card = await fetchByExactName(trimmed);
       const thumb = getThumb(card);
+      const image = getImage(card);
 
-      setCube((prev) => {
-        // dedupe: same id OR same name (safety)
-        const idx = prev.findIndex((x) => x.id === card.id || x.name === card.name);
-        if (idx >= 0) {
-          const next = prev.slice();
-          next[idx] = { ...next[idx], qty: next[idx].qty + 1 };
-          return next;
-        }
-        return [...prev, cardToEntry(card, thumb)];
-      });
-
+      setPending({ card, thumb, image });
+      setPendingQty(1); // quantità di default
       setQuery("");
       setSuggestions([]);
       setIsSuggestOpen(false);
@@ -129,6 +141,28 @@ export default function App() {
     } finally {
       setIsLoading(false);
     }
+  }
+
+  function confirmAddPending() {
+    if (!pending) return;
+    const qty = Math.max(1, Math.min(99, Number(pendingQty) || 1));
+
+    const { card, thumb } = pending;
+
+    setCube((prev) => {
+      const idx = prev.findIndex((x) => x.id === card.id || x.name === card.name);
+      if (idx >= 0) {
+        const next = prev.slice();
+        next[idx] = { ...next[idx], qty: next[idx].qty + qty };
+        return next;
+      }
+      const entry = cardToEntry(card, thumb);
+      entry.qty = qty; // override default
+      return [...prev, entry];
+    });
+
+    setPending(null);
+    setInfo("Carta aggiunta al cubo.");
   }
 
   function removeEntry(id: string) {
@@ -220,13 +254,13 @@ export default function App() {
                 }}
                 onFocus={() => setIsSuggestOpen(true)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && query.trim().length > 0) addCardByName(query.trim());
+                  if (e.key === "Enter" && query.trim().length > 0) previewCardByName(query.trim());
                 }}
               />
               {isSuggestOpen && suggestions.length > 0 && (
                 <div className="suggest" role="listbox" aria-label="Suggerimenti carte">
                   {suggestions.slice(0, 12).map((s) => (
-                    <button key={s} onClick={() => addCardByName(s)} title="Aggiungi al cubo">
+                    <button key={s} onClick={() => previewCardByName(s)} title="Mostra anteprima">
                       {s}
                     </button>
                   ))}
@@ -234,8 +268,8 @@ export default function App() {
               )}
             </div>
 
-            <button className="button" disabled={isLoading || query.trim().length === 0} onClick={() => addCardByName(query.trim())}>
-              {isLoading ? "Carico…" : "Aggiungi"}
+            <button className="button" disabled={isLoading || query.trim().length === 0} onClick={() => previewCardByName(query.trim())}>
+              {isLoading ? "Carico…" : "Anteprima"}
             </button>
           </div>
 
@@ -253,7 +287,7 @@ export default function App() {
           <hr />
 
           {cube.length === 0 ? (
-            <div className="small">Nessuna carta nel cubo. Inizia a cercare sopra 🙂</div>
+            <div className="small">Nessuna carta nel cubo. Cerca una carta e fai Anteprima → Aggiungi 🙂</div>
           ) : (
             <>
               <div className="row" style={{ justifyContent: "space-between" }}>
@@ -285,7 +319,7 @@ export default function App() {
                         </div>
                       </div>
 
-                      <div style={{ display: "grid", gap: 8, justifyItems: "end" }}>
+                      <div style={{ display: "grid", gap: 10, justifyItems: "end" }}>
                         <input
                           className="input qty"
                           type="number"
@@ -350,6 +384,71 @@ export default function App() {
         <span>•</span>
         <a href="./README.html" target="_blank" rel="noreferrer">Doc implementatore</a>
       </div>
+
+      {/* Preview modal */}
+      {pending && (
+        <div className="modalOverlay" role="dialog" aria-modal="true" aria-label="Conferma aggiunta carta" onMouseDown={(e) => {
+          if (e.target === e.currentTarget) setPending(null);
+        }}>
+          <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modalHeader">
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ fontSize: 16 }}><b>{pending.card.name}</b></div>
+                <div className="small muted">{pending.card.type_line}</div>
+              </div>
+              <button className="button secondary" onClick={() => setPending(null)} aria-label="Chiudi anteprima">
+                Chiudi
+              </button>
+            </div>
+
+            <div className="modalBody">
+              <div className="previewImg">
+                {pending.image ? (
+                  <img src={pending.image} alt={pending.card.name} />
+                ) : (
+                  <div style={{ padding: 14 }} className="small">Immagine non disponibile</div>
+                )}
+              </div>
+
+              <div className="card" style={{ margin: 0 }}>
+                <div className="row" style={{ justifyContent: "space-between" }}>
+                  <span className="badge">{pending.card.set.toUpperCase()} #{pending.card.collector_number}</span>
+                  <span className="badge">{pending.card.rarity}</span>
+                </div>
+
+                <div style={{ marginTop: 10 }} className="small">
+                  <b>Conferma aggiunta</b><br />
+                  Imposta la quantità (default 1) e premi “Aggiungi al cubo”.
+                </div>
+
+                <div className="row" style={{ marginTop: 12 }}>
+                  <label className="small" style={{ minWidth: 110 }}>Quantità</label>
+                  <input
+                    className="input qty"
+                    type="number"
+                    min={1}
+                    max={99}
+                    value={pendingQty}
+                    onChange={(e) => setPendingQty(Number(e.target.value))}
+                  />
+                  <a className="small" href={pending.card.scryfall_uri} target="_blank" rel="noreferrer" style={{ marginLeft: "auto" }}>
+                    Apri su Scryfall
+                  </a>
+                </div>
+              </div>
+            </div>
+
+            <div className="modalActions">
+              <button className="button secondary" onClick={() => setPending(null)}>
+                Annulla
+              </button>
+              <button className="button" onClick={confirmAddPending}>
+                Aggiungi al cubo
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
