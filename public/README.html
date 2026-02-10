@@ -1,0 +1,112 @@
+<!doctype html><html lang='it'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Doc implementatore - MTG Cube Builder</title><style>body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:900px;margin:24px auto;padding:0 16px;line-height:1.5;color:#111}code{background:#f3f4f6;padding:2px 4px;border-radius:6px}pre{background:#0b0f16;color:#e8eefc;padding:12px;border-radius:12px;overflow:auto}h1,h2,h3{line-height:1.2}a{color:#1d4ed8}ul{padding-left:20px}</style></head><body>
+<h1>MTG Cube Builder (GitHub Pages ready)</h1>
+<p></p>
+<p>App web **static** per creare un cubo MTG usando **Scryfall API** (autocomplete + dettagli carta) con salvataggio locale e backup automatici.</p>
+<p></p>
+<h2>Caratteristiche</h2>
+<ul>
+<li>Autocomplete nomi carte (Scryfall)</li>
+<ul>
+<li>Aggiunta carte al cubo con quantità (dedup automatico)</li>
+<ul>
+<li>Visualizzazione lista con thumbnail</li>
+<ul>
+<li>**Autosave** su `localStorage`</li>
+<ul>
+<li>**Backup rotanti automatici** (default: 5) su `localStorage`</li>
+<ul>
+<li>Export **CSV** (lista finale) + Export **JSON** (backup completo)</li>
+<ul>
+<li>Ripristino da backup locale</li>
+</ul>
+<p></p>
+<h2>Requisiti</h2>
+<ul>
+<li>Node.js 18+ (consigliato 20+)</li>
+<ul>
+<li>GitHub repository + GitHub Pages (via GitHub Actions)</li>
+</ul>
+<p></p>
+<h2>Setup locale</h2>
+<pre><code>
+npm install
+npm run dev
+</code></pre>
+<p>Apri l'URL mostrato in console.</p>
+<p></p>
+<h2>Build</h2>
+<pre><code>
+npm run build
+npm run preview
+</code></pre>
+<p></p>
+<h2>Deploy su GitHub Pages (consigliato)</h2>
+<p>1. Crea un repo GitHub e copia dentro questo progetto.</p>
+<p>2. Assicurati che il branch principale sia <code>main</code>.</p>
+<p>3. Pusha su GitHub.</p>
+<p>4. Vai su **Settings → Pages** e imposta **Source = GitHub Actions**.</p>
+<p>5. Ogni push su <code>main</code> effettua build e deploy.</p>
+<p></p>
+<p>&gt; Nota: <code>vite.config.ts</code> usa <code>base: "./"</code> così non devi conoscere in anticipo il nome del repository.</p>
+<p></p>
+<h2>Architettura dati</h2>
+<ul>
+<li>Cube entries salvate in `localStorage` key: `mtg_cube_v1`</li>
+<ul>
+<li>Meta (timestamp ultimo salvataggio): `mtg_cube_meta_v1`</li>
+<ul>
+<li>Backup rotanti:</li>
+</ul>
+<p>  - <code>mtg_cube_backup_v1_1</code> … <code>mtg_cube_backup_v1_5</code></p>
+<p>  - contatore slot: <code>mtg_cube_backup_count_v1</code></p>
+<p></p>
+<h3>Modello `CubeEntry`</h3>
+<p>Vedi <code>src/lib/storage.ts</code>. Le colonne esportate nel CSV sono in <code>src/lib/csv.ts</code>.</p>
+<p></p>
+<h2>Backup automatici: come funziona</h2>
+<ul>
+<li>Ogni modifica salva subito lo stato corrente (autosave).</li>
+<ul>
+<li>Inoltre, viene creato un “checkpoint” backup rotante almeno ogni ~45 secondi (configurabile).</li>
+<ul>
+<li>L’utente può ripristinare uno dei backup disponibili tramite UI.</li>
+</ul>
+<p></p>
+<p>Parametri configurabili:</p>
+<ul>
+<li>`BACKUPS_TO_KEEP` (default 5) in `src/App.tsx`</li>
+<ul>
+<li>`BACKUP_EVERY_MS` (default 45000) in `src/App.tsx`</li>
+</ul>
+<p></p>
+<h2>Import (opzionale)</h2>
+<p>Questo pacchetto include export CSV/JSON e ripristino da backup locale.</p>
+<p>Se vuoi import JSON/CSV:</p>
+<ul>
+<li>aggiungi un input file e parse in `setCube()`</li>
+<ul>
+<li>per JSON, è sufficiente leggere `{ version, entries }`</li>
+</ul>
+<p></p>
+<h2>Limitazioni (importanti)</h2>
+<ul>
+<li>GitHub Pages è **statico**: non esiste un DB condiviso tra utenti.</li>
+<ul>
+<li>Ogni utente ha il proprio cubo nel proprio browser/dispositivo.</li>
+<ul>
+<li>Incognito / cancellazione dati sito → perdita dei dati locali.</li>
+<ul>
+<li>Per trasferire su altro device: usare **Export JSON**.</li>
+</ul>
+<p></p>
+<h2>Scryfall</h2>
+<p>Questa app usa endpoint pubblici di Scryfall:</p>
+<ul>
+<li>`GET /cards/autocomplete?q=...`</li>
+<ul>
+<li>`GET /cards/named?exact=...` (fallback `fuzzy`)</li>
+</ul>
+<p></p>
+<h2>Licenza</h2>
+<p>MIT.</p>
+</body></html>
