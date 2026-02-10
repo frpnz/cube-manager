@@ -40,6 +40,23 @@ Se qualcosa va storto, puoi usare:
 
 > Nota: i backup locali funzionano solo sullo stesso browser/dispositivo.
 
+
+## Cercare usando il nome italiano
+L’autocomplete mostra i nomi **inglesi**. Se però conosci solo il nome italiano:
+1. scrivi il nome italiano
+2. premi **Invio** oppure **Anteprima**
+3. l’app prova a trovare una stampa italiana e a convertirla nel nome inglese (IT → EN)
+
+Se ci sono più risultati possibili, ti verrà chiesto di scegliere quello corretto.
+Nota: questo funziona solo per carte che hanno una stampa in italiano su Scryfall.
+
+## Import JSON (per spostare il cubo tra browser/PC)
+Se hai un file `cube.json` (esportato dall’app):
+1. Vai nella sezione “Backup & Export”
+2. Clicca **Import JSON**
+3. Seleziona il file `.json`
+4. Scegli se **Sostituire** il cubo corrente oppure **Unire** (somma le quantità)
+
 ## Export: come consegnare la lista a qualcuno
 Nella sezione “Backup & Export” hai due pulsanti:
 

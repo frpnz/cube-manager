@@ -1,17 +1,36 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { autocompleteNames, fetchByExactName, getImage, getThumb, type ScryfallCard } from "./lib/scryfall";
+import {
+  autocompleteNames,
+  fetchByExactName,
+  fetchEnglishByOracleId,
+  getImage,
+  getThumb,
+  searchItalianByName,
+  displayName,
+  type ScryfallCard
+} from "./lib/scryfall";
 import { cardToEntry, loadCube, loadMeta, saveCube, type CubeEntry } from "./lib/storage";
 import { cubeToCsv, cubeToJson, downloadTextFile } from "./lib/csv";
 import { debounce } from "./lib/debounce";
 import { listBackups, restoreBackup, rotateBackups } from "./lib/backup";
+import { parseCubeJson } from "./lib/importer";
 
 const BACKUPS_TO_KEEP = 5;
 const BACKUP_EVERY_MS = 45_000; // checkpoint at most every 45s (also on first change)
 
 type Pending = {
-  card: ScryfallCard;
+  input: string;
+  card: ScryfallCard; // EN card used for the cube
   thumb?: string;
   image?: string;
+  matchedViaItalian?: boolean;
+  italianName?: string;
+};
+
+type Candidate = {
+  itCard: ScryfallCard;
+  itName: string;
+  hint: string;
 };
 
 function fmtTime(ts?: number) {
@@ -37,6 +56,9 @@ export default function App() {
   const [pending, setPending] = useState<Pending | null>(null);
   const [pendingQty, setPendingQty] = useState<number>(1);
 
+  // If Italian input matches multiple cards, show candidates first
+  const [candidates, setCandidates] = useState<{ input: string; list: Candidate[] } | null>(null);
+
   const meta = loadMeta();
   const totalCount = useMemo(() => cube.reduce((acc, e) => acc + e.qty, 0), [cube]);
 
@@ -50,7 +72,6 @@ export default function App() {
     saveCube(cube);
     dirtyRef.current = true;
 
-    // create periodic checkpoints (rotating backups)
     const now = Date.now();
     if (now - lastCheckpointRef.current > BACKUP_EVERY_MS) {
       rotateBackups(cube, BACKUPS_TO_KEEP);
@@ -64,7 +85,7 @@ export default function App() {
     const handler = (e: BeforeUnloadEvent) => {
       if (!dirtyRef.current) return;
       e.preventDefault();
-      e.returnValue = ""; // required for some browsers
+      e.returnValue = "";
     };
     window.addEventListener("beforeunload", handler);
     return () => window.removeEventListener("beforeunload", handler);
@@ -80,10 +101,13 @@ export default function App() {
     return () => document.removeEventListener("mousedown", onDocClick);
   }, []);
 
-  // Escape closes modal
+  // Escape closes modal(s)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setPending(null);
+      if (e.key === "Escape") {
+        setPending(null);
+        setCandidates(null);
+      }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
@@ -120,24 +144,121 @@ export default function App() {
     runSuggest(query);
   }, [query, runSuggest]);
 
-  async function previewCardByName(name: string) {
-    const trimmed = name.trim();
+  async function previewCardByName(input: string) {
+    const trimmed = input.trim();
     if (!trimmed) return;
+
     setIsLoading(true);
     setError(null);
     setInfo(null);
+    setPending(null);
+    setCandidates(null);
+
+    // 1) Try normal EN-first (works for English names and many partials)
     try {
       const card = await fetchByExactName(trimmed);
       const thumb = getThumb(card);
       const image = getImage(card);
 
-      setPending({ card, thumb, image });
-      setPendingQty(1); // quantità di default
+      setPending({
+        input: trimmed,
+        card,
+        thumb,
+        image,
+        matchedViaItalian: false
+      });
+      setPendingQty(1);
+      setQuery("");
+      setSuggestions([]);
+      setIsSuggestOpen(false);
+      return;
+    } catch (e: any) {
+      // fallback below
+    }
+
+    // 2) Fallback: user typed Italian name -> try to find IT printing(s), then map to EN via oracle_id
+    try {
+      const itMatches = await searchItalianByName(trimmed);
+      if (itMatches.length === 0) {
+        setError("Nessun risultato. Suggerimento: prova il nome inglese (autocomplete) oppure controlla la spelling.");
+        return;
+      }
+
+      // Build candidate list (avoid duplicates by oracle_id when possible)
+      const seen = new Set<string>();
+      const list: Candidate[] = [];
+      for (const c of itMatches) {
+        const key = (c.oracle_id ?? c.id) + "|" + (c.printed_name ?? c.name);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const itName = displayName(c);
+        const hint = `${c.set.toUpperCase()} #${c.collector_number} • ${c.rarity}`;
+        list.push({ itCard: c, itName, hint });
+        if (list.length >= 8) break;
+      }
+
+      // If multiple candidates, ask user to pick
+      if (list.length > 1) {
+        setCandidates({ input: trimmed, list });
+        setQuery("");
+        setSuggestions([]);
+        setIsSuggestOpen(false);
+        return;
+      }
+
+      // Single candidate -> map to EN automatically
+      const only = list[0].itCard;
+      const oracleId = only.oracle_id;
+      if (!oracleId) {
+        setError("Trovata una stampa IT, ma manca oracle_id per mappare in inglese.");
+        return;
+      }
+      const en = await fetchEnglishByOracleId(oracleId);
+      if (!en) {
+        setError("Trovata stampa IT ma non riesco a trovare la corrispondente EN.");
+        return;
+      }
+
+      setPending({
+        input: trimmed,
+        card: en,
+        thumb: getThumb(en),
+        image: getImage(en),
+        matchedViaItalian: true,
+        italianName: displayName(only)
+      });
+      setPendingQty(1);
       setQuery("");
       setSuggestions([]);
       setIsSuggestOpen(false);
     } catch (e: any) {
-      setError(e?.message ?? "Errore caricamento carta");
+      setError(e?.message ?? "Errore ricerca IT→EN");
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function chooseCandidate(c: Candidate) {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const oracleId = c.itCard.oracle_id;
+      if (!oracleId) throw new Error("Candidato senza oracle_id (impossibile mappare).");
+      const en = await fetchEnglishByOracleId(oracleId);
+      if (!en) throw new Error("Non riesco a trovare la corrispondente EN.");
+
+      setCandidates(null);
+      setPending({
+        input: candidates?.input ?? "",
+        card: en,
+        thumb: getThumb(en),
+        image: getImage(en),
+        matchedViaItalian: true,
+        italianName: c.itName
+      });
+      setPendingQty(1);
+    } catch (e: any) {
+      setError(e?.message ?? "Errore selezione candidato");
     } finally {
       setIsLoading(false);
     }
@@ -188,6 +309,56 @@ export default function App() {
     setInfo("JSON esportato (backup completo).");
   }
 
+async function importJsonFile(file: File) {
+  try {
+    setError(null);
+    setInfo(null);
+    const text = await file.text();
+    const entries = parseCubeJson(text);
+
+    const msg =
+      `Import: trovate ${entries.length} righe.\n\n` +
+      `OK = Sostituisci il cubo corrente\n` +
+      `Annulla = Unisci (somma qty dove possibile)`;
+
+    const replace = confirm(msg);
+
+    setCube((prev) => {
+      if (replace) return entries;
+
+      const map = new Map<string, CubeEntry>();
+      for (const p of prev) map.set(p.id || p.name, { ...p });
+
+      for (const e of entries) {
+        const key = e.id || e.name;
+        const existing = map.get(key);
+        if (existing) {
+          map.set(key, { ...existing, qty: Math.min(99, existing.qty + e.qty) });
+        } else {
+          map.set(key, { ...e });
+        }
+      }
+      return Array.from(map.values());
+    });
+
+    setInfo("Import completato.");
+  } catch (e: any) {
+    setError(e?.message ?? "Errore import JSON");
+  }
+}
+
+function onPickImportFile(ev: React.ChangeEvent<HTMLInputElement>) {
+  const f = ev.target.files?.[0];
+  if (!f) return;
+  if (!f.name.toLowerCase().endsWith(".json")) {
+    setError("Seleziona un file .json");
+    ev.target.value = "";
+    return;
+  }
+  importJsonFile(f);
+  ev.target.value = "";
+}
+
   function clearCube() {
     if (!confirm("Sicuro di voler svuotare il cubo?")) return;
     setCube([]);
@@ -233,7 +404,7 @@ export default function App() {
     <div className="container">
       <div className="header">
         <h1 className="title">MTG Cube Builder</h1>
-        <span className="badge">GitHub Pages ready</span>
+        <span className="badge">Desktop-first</span>
         <span className="badge">Scryfall API</span>
       </div>
       <p className="subtitle">
@@ -243,11 +414,11 @@ export default function App() {
       <div className="two-col" style={{ marginTop: 14 }}>
         <div className="card" ref={clickAwayRef}>
           <div className="row">
-            <div className="dropdown" style={{ flex: 1, minWidth: 280 }}>
+            <div className="dropdown" style={{ flex: 1, minWidth: 360 }}>
               <input
                 className="input"
                 value={query}
-                placeholder='Scrivi il nome carta… (es. "Lightning Bolt")'
+                placeholder='Cerca per nome (autocomplete EN). Se conosci l’italiano, scrivilo e premi Invio: proverò IT → EN.'
                 onChange={(e) => {
                   setQuery(e.target.value);
                   setIsSuggestOpen(true);
@@ -287,12 +458,12 @@ export default function App() {
           <hr />
 
           {cube.length === 0 ? (
-            <div className="small">Nessuna carta nel cubo. Cerca una carta e fai Anteprima → Aggiungi 🙂</div>
+            <div className="small">Nessuna carta nel cubo. Cerca → Anteprima → Aggiungi 🙂</div>
           ) : (
             <>
               <div className="row" style={{ justifyContent: "space-between" }}>
                 <div className="small muted">
-                  Suggerimento: prima di cambiare dispositivo o browser, esporta un backup JSON.
+                  Tip: per spostare il cubo su un altro PC/browser, usa Export JSON.
                 </div>
               </div>
 
@@ -363,16 +534,15 @@ export default function App() {
           <hr />
 
           <div className="small">
-            <b>Come funziona il salvataggio:</b>
+            <b>Multibrowser:</b>
             <ul>
-              <li>Ogni modifica viene salvata automaticamente in questo browser (localStorage).</li>
-              <li>In più, l’app crea backup rotanti automatici (fino a {BACKUPS_TO_KEEP}).</li>
-              <li>Per portare il cubo su un altro PC/telefono: usa <b>Export JSON</b>.</li>
+              <li>Ogni browser ha i propri dati locali.</li>
+              <li>Per usare il cubo su un altro browser/PC: <b>Export JSON</b>, poi su quell'altro browser fai <b>Import JSON</b>.</li>
             </ul>
           </div>
 
           <div className="footer">
-            <span>Tip: evita modalità Incognito per non perdere dati alla chiusura.</span>
+            <span>Tip: evita Incognito per non perdere dati alla chiusura.</span>
           </div>
         </div>
       </div>
@@ -384,6 +554,57 @@ export default function App() {
         <span>•</span>
         <a href="./README.html" target="_blank" rel="noreferrer">Doc implementatore</a>
       </div>
+
+      {/* Candidate modal (Italian ambiguity) */}
+      {candidates && (
+        <div className="modalOverlay" role="dialog" aria-modal="true" aria-label="Seleziona carta corrispondente" onMouseDown={(e) => {
+          if (e.target === e.currentTarget) setCandidates(null);
+        }}>
+          <div className="modal" onMouseDown={(e) => e.stopPropagation()}>
+            <div className="modalHeader">
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                <div style={{ fontSize: 16 }}><b>Ho trovato più risultati in italiano</b></div>
+                <div className="small muted">Scegli quello giusto per mappare al nome inglese.</div>
+              </div>
+              <button className="button secondary" onClick={() => setCandidates(null)}>
+                Chiudi
+              </button>
+            </div>
+
+            <div className="modalBody" style={{ gridTemplateColumns: "1fr" }}>
+              <div className="card" style={{ margin: 0 }}>
+                <div className="small muted">Input: <b>{candidates.input}</b></div>
+                <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+                  {candidates.list.map((c, idx) => (
+                    <button
+                      key={idx}
+                      className="button secondary"
+                      style={{ textAlign: "left", width: "100%" }}
+                      onClick={() => chooseCandidate(c)}
+                      disabled={isLoading}
+                      title="Seleziona"
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                        <b>{c.itName}</b>
+                        <span className="badge">{c.hint}</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <div className="small muted" style={{ marginTop: 12 }}>
+                  Nota: la ricerca IT funziona solo se esiste una stampa in italiano su Scryfall.
+                </div>
+              </div>
+            </div>
+
+            <div className="modalActions">
+              <button className="button secondary" onClick={() => setCandidates(null)}>
+                Annulla
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Preview modal */}
       {pending && (
@@ -415,6 +636,14 @@ export default function App() {
                   <span className="badge">{pending.card.set.toUpperCase()} #{pending.card.collector_number}</span>
                   <span className="badge">{pending.card.rarity}</span>
                 </div>
+
+                {pending.matchedViaItalian && (
+                  <div className="banner" style={{ marginTop: 12 }}>
+                    <span className="small">
+                      IT → EN: <b>{pending.italianName ?? pending.input}</b> → <b>{pending.card.name}</b>
+                    </span>
+                  </div>
+                )}
 
                 <div style={{ marginTop: 10 }} className="small">
                   <b>Conferma aggiunta</b><br />
