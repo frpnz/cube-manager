@@ -3,8 +3,7 @@
 App web **static** per creare un cubo MTG usando **Scryfall API** (autocomplete + dettagli carta) con salvataggio locale e backup automatici.
 
 ## Caratteristiche
-- Autocomplete nomi carte (Scryfall, **inglese**)
-- Helper ricerca IT→EN: se inserisci un nome italiano, prova a mappare alla carta inglese tramite stampe IT (quando disponibili)
+- Autocomplete nomi carte (Scryfall)
 - Anteprima carta con immagine + conferma aggiunta (quantità default 1)
 - Aggiunta carte al cubo con quantità (dedup automatico)
 - Visualizzazione lista con thumbnail
